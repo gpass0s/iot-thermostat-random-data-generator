@@ -8,14 +8,17 @@ This module implements a fake data producer for the IoT process
 """
 import boto3
 import json
-import numpy
 import os
 import threading
 import time
 import uuid
-
 import random
 import datetime
+
+_kds_client = boto3.client('kinesis')
+_kds_name = os.environ["KDS_NAME"]
+_kds_partitions = int(os.environ["KDS_PARTITIONS"])
+aws_region = os.environ["REGION"]
 
 
 def generate_temperature_message(
@@ -97,7 +100,6 @@ def generate_relay_position_message(
 
 
 def threads_controller():
-
     iot_id = random.getrandbits(64)
     curr_temp = random.randint(30, 80)
     curr_humidity = random.randint(35, 50)
@@ -106,7 +108,7 @@ def threads_controller():
     trend = [-1, 1]
     relay_position = random.randint(0, 6)
     count = 0
-    while count < 5:
+    while count < 100:
 
         if count == 0 or count % trend_change == 0:
             humidity_trend = trend[random.randint(0, 1)]
@@ -138,24 +140,35 @@ def threads_controller():
             span_id=span_id,
             relay_position=relay_position
         )
-        print(power_message)
-        print(temperature_message)
-        print(relay_message)
 
+        messages = [power_message, temperature_message, relay_message]
+
+        for message in messages:
+            _kds_client.put_record(StreamName=_kds_name,
+                                   Data=json.dumps(message),
+                                   PartitionKey=str(random.randint(1, _kds_partitions))
+                                   )
+
+            print(f"MESSAGE FROM {iot_id} DEVICE SUCCESSFULLY SENT TO KDS: {json.dumps(message)}")
         count += 1
         time.sleep(random.uniform(5, 15))
 
 
-if __name__ == "__main__":
+def lambda_handler(event, context):
+    """
+        Lambda method that is invoked by SQS
+        :param event: message from SQS
+        :param context:
+    """
 
-    number_of_threads = 2 # threads simulate concurrent accesses
+    number_of_threads = int(os.environ["NUMBER_OF_THREADS"]) # threads simulate concurrent accesses
 
     print("[INFO] Starting data producer")
 
     threads = []
 
     print("[INFO] Starting parallel threads")
-    for i in range(number_of_threads):# start threads
+    for i in range(number_of_threads):  # start threads
         thread = threading.Thread(target=threads_controller)
         thread.start()
         print(f"[INFO] Thread {i} started")
